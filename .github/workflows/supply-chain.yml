@@ -1,0 +1,42 @@
+name: Supply Chain Security
+
+on:
+  pull_request:
+    paths:
+      - 'pnpm-lock.yaml'
+      - 'package.json'
+      - '**/package.json'
+  push:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify lockfile not tampered
+        run: |
+          HASH=$(sha256sum pnpm-lock.yaml | awk '{print $1}')
+          echo "lockfile-sha256=$HASH" >> $GITHUB_STEP_SUMMARY
+
+      - uses: pnpm/action-setup@v3
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+
+      - name: pnpm audit (high+critical)
+        run: pnpm audit --audit-level=high --prod
+
+      - name: Custom supply chain check
+        run: node infrastructure/scripts/supply-chain-audit.mjs
+
+      - name: Check for known-malicious patterns
+        run: |
+          # postinstall scripts in unknown packages are a common supply chain attack vector
+          node -e "
+            const lock = require('fs').readFileSync('pnpm-lock.yaml','utf8')
+            const bad = lock.match(/postinstall:.+curl|wget|bash|sh -c/g)
+            if (bad) { console.error('Suspicious postinstall:', bad); process.exit(1) }
+            console.log('No suspicious postinstall scripts found')
+          "
